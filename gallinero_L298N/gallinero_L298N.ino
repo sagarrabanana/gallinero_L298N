@@ -214,4 +214,4 @@ void detenerMotor() {
   digitalWrite(motorIN1, LOW);
   digitalWrite(motorIN2, LOW);
   digitalWrite(motorENA, LOW);
-}```
+}
