@@ -30,8 +30,8 @@ int direccionEeprom = 0;
 
 // --- Variables de Temporización ---
 unsigned long tiempoAnteriorParpadeo = 0;
-const long intervaloParpadeo = 250;     // Parpadeo normal y alterno
-const long intervaloParpadeoError = 100; // Parpadeo rápido para error
+const long intervaloParpadeo = 250;
+const long intervaloParpadeoError = 100;
 bool estadoLedParpadeo = false;
 unsigned long tiempoInicioMovimiento = 0;
 
@@ -53,8 +53,6 @@ void setup() {
 
   detenerMotor();
   
-  // La lógica de arranque no cambia y ya gestiona correctamente los estados de error
-  // al no guardarlos nunca en la EEPROM.
   bool fcAbiertoPulsado = (digitalRead(fcAbiertoPin) == LOW);
   bool fcCerradoPulsado = (digitalRead(fcCerradoPin) == LOW);
   EstadoPuerta estadoAlArrancar;
@@ -90,17 +88,28 @@ void loop() {
 // GESTIÓN DE FUNCIONES
 //******************************************************************************
 
+// --- ¡FUNCIÓN CORREGIDA! ---
 void gestionarControlesManuales() {
   bool botonAbrirPulsado = (digitalRead(pulsadorAbrirPin) == LOW);
   bool botonCerrarPulsado = (digitalRead(pulsadorCerrarPin) == LOW);
 
+  // Lógica de Interrupción: se activa si un botón se pulsa DURANTE el movimiento.
   if ((estadoActual == ABRIENDO || estadoActual == CERRANDO) && (botonAbrirPulsado || botonCerrarPulsado)) {
     Serial.println("Movimiento INTERRUMPIDO manualmente.");
     estadoActual = PARADA_MANUAL;
-    delay(50);
-    return;
+    
+    // ¡CAMBIO CLAVE! Bucle de espera.
+    // Este bucle se asegura de que el código no continúe hasta que el usuario
+    // haya soltado el botón que causó la interrupción.
+    // Esto previene que una sola pulsación larga sea interpretada como "parar" e "iniciar de nuevo".
+    while(digitalRead(pulsadorAbrirPin) == LOW || digitalRead(pulsadorCerrarPin) == LOW) {
+      // No hacer nada, solo esperar a que se suelten todos los botones.
+    }
+    
+    return; // Salir de la función en este ciclo para procesar la parada.
   }
 
+  // Lógica de Arranque: se activa si un botón se pulsa MIENTRAS la puerta está parada.
   if (estadoActual == ABIERTA || estadoActual == CERRADA || estadoActual == PARADA_ERROR || estadoActual == PARADA_MANUAL) {
     if (botonAbrirPulsado && estadoActual != ABIERTA) {
       iniciarMovimiento(ABRIENDO);
@@ -109,6 +118,7 @@ void gestionarControlesManuales() {
     }
   }
 }
+
 
 void gestionarMovimientoPuerta() {
   switch (estadoActual) {
@@ -170,20 +180,16 @@ void gestionarLeds() {
       digitalWrite(ledCerrarPin, HIGH);
       break;
     case PARADA_ERROR:
-      // Ambos LEDs parpadean rápido y a la vez para indicar error.
       digitalWrite(ledAbrirPin, estadoLedParpadeo);
       digitalWrite(ledCerrarPin, estadoLedParpadeo);
       break;
     case PARADA_MANUAL:
-      // ¡NUEVA LÓGICA DE LEDS!
-      // Los LEDs parpadean de forma alterna para indicar parada manual.
       digitalWrite(ledAbrirPin, estadoLedParpadeo);
-      digitalWrite(ledCerrarPin, !estadoLedParpadeo); // El "!" invierte el estado del otro LED
+      digitalWrite(ledCerrarPin, !estadoLedParpadeo);
       break;
   }
 }
 
-// --- Funciones de Control del Motor y Estado ---
 void iniciarMovimiento(EstadoPuerta nuevoEstado) {
   estadoActual = nuevoEstado;
   tiempoInicioMovimiento = millis();
