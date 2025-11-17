@@ -1,26 +1,18 @@
 #include <EEPROM.h>
 
 // --- Configuración de Pines ---
-// Motor (Driver L298N)
 const int motorIN1 = 8;
 const int motorIN2 = 9;
 const int motorENA = 10;
-
-// Finales de Carrera (Limit Switches)
 const int fcAbiertoPin = 2;
 const int fcCerradoPin = 3;
-
-// Pulsadores Manuales
 const int pulsadorAbrirPin = 4;
 const int pulsadorCerrarPin = 5;
-
-// LEDs de Estado
-const int ledAbrirPin = 11;  // Verde
-const int ledCerrarPin = 12; // Rojo
+const int ledAbrirPin = 11;
+const int ledCerrarPin = 12;
 
 // --- Configuración de Seguridad ---
-// ¡¡AJUSTAR ESTE VALOR!! Mide cuánto tarda la puerta y añade un 20-30% de margen.
-const unsigned long TIMEOUT_MOVIMIENTO = 15000; // 15 segundos en milisegundos
+const unsigned long TIMEOUT_MOVIMIENTO = 15000; // 15 segundos
 
 // --- Estados del Sistema ---
 enum EstadoPuerta {
@@ -28,7 +20,8 @@ enum EstadoPuerta {
   CERRADA,
   ABRIENDO,
   CERRANDO,
-  PARADA_ERROR // Estado por timeout o fallo
+  PARADA_ERROR,
+  PARADA_MANUAL
 };
 EstadoPuerta estadoActual;
 
@@ -37,11 +30,9 @@ int direccionEeprom = 0;
 
 // --- Variables de Temporización ---
 unsigned long tiempoAnteriorParpadeo = 0;
-const long intervaloParpadeo = 250;     // Parpadeo normal
+const long intervaloParpadeo = 250;     // Parpadeo normal y alterno
 const long intervaloParpadeoError = 100; // Parpadeo rápido para error
 bool estadoLedParpadeo = false;
-
-// Variable para controlar el timeout del motor
 unsigned long tiempoInicioMovimiento = 0;
 
 //******************************************************************************
@@ -53,10 +44,8 @@ void setup() {
   pinMode(motorIN1, OUTPUT);
   pinMode(motorIN2, OUTPUT);
   pinMode(motorENA, OUTPUT);
-
   pinMode(ledAbrirPin, OUTPUT);
   pinMode(ledCerrarPin, OUTPUT);
-
   pinMode(fcAbiertoPin, INPUT_PULLUP);
   pinMode(fcCerradoPin, INPUT_PULLUP);
   pinMode(pulsadorAbrirPin, INPUT_PULLUP);
@@ -64,32 +53,26 @@ void setup() {
 
   detenerMotor();
   
-  // --- Lógica de Arranque: Determinar el estado inicial ---
+  // La lógica de arranque no cambia y ya gestiona correctamente los estados de error
+  // al no guardarlos nunca en la EEPROM.
   bool fcAbiertoPulsado = (digitalRead(fcAbiertoPin) == LOW);
   bool fcCerradoPulsado = (digitalRead(fcCerradoPin) == LOW);
-  
   EstadoPuerta estadoAlArrancar;
 
   if (fcCerradoPulsado) {
-    Serial.println("Arranque: Final de carrera CERRADO detectado.");
     estadoAlArrancar = CERRADA;
     EEPROM.update(direccionEeprom, 0);
   } else if (fcAbiertoPulsado) {
-    Serial.println("Arranque: Final de carrera ABIERTO detectado.");
     estadoAlArrancar = ABIERTA;
     EEPROM.update(direccionEeprom, 1);
   } else {
-    Serial.println("Arranque: Ningún final de carrera detectado. Usando EEPROM.");
     byte estadoGuardado = EEPROM.read(direccionEeprom);
     estadoAlArrancar = (estadoGuardado == 1) ? ABIERTA : CERRADA;
   }
 
-  // --- Decidir la acción a realizar ---
   if (estadoAlArrancar == CERRADA) {
-    Serial.println("Acción de arranque: ABRIR.");
     iniciarMovimiento(ABRIENDO);
   } else {
-    Serial.println("Acción de arranque: CERRAR.");
     iniciarMovimiento(CERRANDO);
   }
 }
@@ -108,13 +91,20 @@ void loop() {
 //******************************************************************************
 
 void gestionarControlesManuales() {
-  // Permitir control manual si la puerta está parada (incluso en estado de error)
-  if (estadoActual == ABIERTA || estadoActual == CERRADA || estadoActual == PARADA_ERROR) {
-    if (digitalRead(pulsadorAbrirPin) == LOW && estadoActual != ABIERTA) {
-      Serial.println("Pulsador ABRIR presionado.");
+  bool botonAbrirPulsado = (digitalRead(pulsadorAbrirPin) == LOW);
+  bool botonCerrarPulsado = (digitalRead(pulsadorCerrarPin) == LOW);
+
+  if ((estadoActual == ABRIENDO || estadoActual == CERRANDO) && (botonAbrirPulsado || botonCerrarPulsado)) {
+    Serial.println("Movimiento INTERRUMPIDO manualmente.");
+    estadoActual = PARADA_MANUAL;
+    delay(50);
+    return;
+  }
+
+  if (estadoActual == ABIERTA || estadoActual == CERRADA || estadoActual == PARADA_ERROR || estadoActual == PARADA_MANUAL) {
+    if (botonAbrirPulsado && estadoActual != ABIERTA) {
       iniciarMovimiento(ABRIENDO);
-    } else if (digitalRead(pulsadorCerrarPin) == LOW && estadoActual != CERRADA) {
-      Serial.println("Pulsador CERRAR presionado.");
+    } else if (botonCerrarPulsado && estadoActual != CERRADA) {
       iniciarMovimiento(CERRANDO);
     }
   }
@@ -124,35 +114,30 @@ void gestionarMovimientoPuerta() {
   switch (estadoActual) {
     case ABRIENDO:
       if (digitalRead(fcAbiertoPin) == LOW) {
-        Serial.println("Destino alcanzado: ABIERTA");
         detenerMotor();
         estadoActual = ABIERTA;
         EEPROM.update(direccionEeprom, 1);
       } else if (millis() - tiempoInicioMovimiento > TIMEOUT_MOVIMIENTO) {
-        Serial.println("¡ERROR: Timeout durante la apertura! Motor detenido por seguridad.");
         detenerMotor();
         estadoActual = PARADA_ERROR;
       } else {
         abrirPuerta();
       }
       break;
-
     case CERRANDO:
       if (digitalRead(fcCerradoPin) == LOW) {
-        Serial.println("Destino alcanzado: CERRADA");
         detenerMotor();
         estadoActual = CERRADA;
         EEPROM.update(direccionEeprom, 0);
       } else if (millis() - tiempoInicioMovimiento > TIMEOUT_MOVIMIENTO) {
-        Serial.println("¡ERROR: Timeout durante el cierre! Motor detenido por seguridad.");
         detenerMotor();
         estadoActual = PARADA_ERROR;
       } else {
         cerrarPuerta();
       }
       break;
-
-    default: // Incluye ABIERTA, CERRADA, PARADA_ERROR
+    case PARADA_MANUAL:
+    default:
       detenerMotor();
       break;
   }
@@ -185,9 +170,15 @@ void gestionarLeds() {
       digitalWrite(ledCerrarPin, HIGH);
       break;
     case PARADA_ERROR:
-      // Ambos LEDs parpadean rápido para indicar error
+      // Ambos LEDs parpadean rápido y a la vez para indicar error.
       digitalWrite(ledAbrirPin, estadoLedParpadeo);
       digitalWrite(ledCerrarPin, estadoLedParpadeo);
+      break;
+    case PARADA_MANUAL:
+      // ¡NUEVA LÓGICA DE LEDS!
+      // Los LEDs parpadean de forma alterna para indicar parada manual.
+      digitalWrite(ledAbrirPin, estadoLedParpadeo);
+      digitalWrite(ledCerrarPin, !estadoLedParpadeo); // El "!" invierte el estado del otro LED
       break;
   }
 }
@@ -195,7 +186,7 @@ void gestionarLeds() {
 // --- Funciones de Control del Motor y Estado ---
 void iniciarMovimiento(EstadoPuerta nuevoEstado) {
   estadoActual = nuevoEstado;
-  tiempoInicioMovimiento = millis(); // Reinicia el temporizador de seguridad
+  tiempoInicioMovimiento = millis();
 }
 
 void abrirPuerta() {
