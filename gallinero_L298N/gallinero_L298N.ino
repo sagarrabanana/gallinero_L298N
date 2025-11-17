@@ -88,7 +88,7 @@ void loop() {
 // GESTIÓN DE FUNCIONES
 //******************************************************************************
 
-// --- ¡FUNCIÓN CORREGIDA! ---
+// --- ¡FUNCIÓN CORREGIDA Y SIMPLIFICADA! ---
 void gestionarControlesManuales() {
   bool botonAbrirPulsado = (digitalRead(pulsadorAbrirPin) == LOW);
   bool botonCerrarPulsado = (digitalRead(pulsadorCerrarPin) == LOW);
@@ -96,17 +96,18 @@ void gestionarControlesManuales() {
   // Lógica de Interrupción: se activa si un botón se pulsa DURANTE el movimiento.
   if ((estadoActual == ABRIENDO || estadoActual == CERRANDO) && (botonAbrirPulsado || botonCerrarPulsado)) {
     Serial.println("Movimiento INTERRUMPIDO manualmente.");
+    
+    // 1. Detener el motor INMEDIATAMENTE.
+    detenerMotor(); 
+    
+    // 2. Cambiar el estado del sistema.
     estadoActual = PARADA_MANUAL;
     
-    // ¡CAMBIO CLAVE! Bucle de espera.
-    // Este bucle se asegura de que el código no continúe hasta que el usuario
-    // haya soltado el botón que causó la interrupción.
-    // Esto previene que una sola pulsación larga sea interpretada como "parar" e "iniciar de nuevo".
-    while(digitalRead(pulsadorAbrirPin) == LOW || digitalRead(pulsadorCerrarPin) == LOW) {
-      // No hacer nada, solo esperar a que se suelten todos los botones.
-    }
+    // 3. Pausar para evitar lecturas dobles (debounce).
+    // Esta pausa es crucial y soluciona el problema.
+    delay(500); 
     
-    return; // Salir de la función en este ciclo para procesar la parada.
+    return; // Salir de la función para asegurar que el nuevo estado se procesa limpiamente en el siguiente ciclo.
   }
 
   // Lógica de Arranque: se activa si un botón se pulsa MIENTRAS la puerta está parada.
@@ -118,7 +119,6 @@ void gestionarControlesManuales() {
     }
   }
 }
-
 
 void gestionarMovimientoPuerta() {
   switch (estadoActual) {
@@ -147,7 +147,10 @@ void gestionarMovimientoPuerta() {
       }
       break;
     case PARADA_MANUAL:
-    default:
+    case PARADA_ERROR:
+    case ABIERTA:
+    case CERRADA:
+      // En cualquier estado de parada, nos aseguramos de que el motor esté detenido.
       detenerMotor();
       break;
   }
@@ -211,4 +214,4 @@ void detenerMotor() {
   digitalWrite(motorIN1, LOW);
   digitalWrite(motorIN2, LOW);
   digitalWrite(motorENA, LOW);
-}
+}```
